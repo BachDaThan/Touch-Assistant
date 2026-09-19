@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Touch Assistant</string>
+    <string name="accessibility_service_description">
+        Touch Assistant dùng dịch vụ Accessibility chỉ để thực hiện các lệnh bạn chọn trên nút nổi:
+        Home, Back, Recents, Khóa màn hình, Chụp màn hình.
+        App không đọc nội dung màn hình, không theo dõi thao tác, không gửi dữ liệu đi đâu cả.
+    </string>
+</resources>
