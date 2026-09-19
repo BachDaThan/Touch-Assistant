@@ -58,60 +58,69 @@ jobs:
       - name: Get dependencies
         run: flutter pub get
 
-      - name: Decode & verify keystore (optional)
+      # Mặc định: KHÔNG dùng keystore (debug sign) để chắc chắn ra APK.
+      # Chỉ bật release sign khi keytool xác nhận pass đúng.
+      - name: Setup signing (optional, verified)
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         run: |
-          set +e
+          # Luôn xóa key.properties trước — mặc định debug sign
+          rm -f android/key.properties android/app/upload-keystore.jks
+
           if [ -z "$KEYSTORE_BASE64" ]; then
-            echo "No KEYSTORE_BASE64 — build with debug signing"
+            echo ">>> No KEYSTORE_BASE64 secret → debug signing (OK, APK vẫn ra)"
             exit 0
           fi
 
-          # Decode (strip whitespace/newlines that break base64)
+          echo ">>> KEYSTORE_BASE64 present (length: ${#KEYSTORE_BASE64})"
           echo "$KEYSTORE_BASE64" | tr -d ' \n\r\t' | base64 --decode > android/app/upload-keystore.jks
           if [ ! -s android/app/upload-keystore.jks ]; then
-            echo "WARN: keystore decode empty — using debug signing"
+            echo ">>> Decode failed → debug signing"
+            rm -f android/app/upload-keystore.jks
+            exit 0
+          fi
+          echo ">>> Decoded jks size: $(wc -c < android/app/upload-keystore.jks) bytes"
+
+          # Test password — dùng file log, không pipe (tránh sai $? )
+          keytool -list -keystore android/app/upload-keystore.jks \
+            -storepass "$KEYSTORE_PASSWORD" -storetype PKCS12 \
+            > /tmp/kt_out.txt 2>&1
+          KT_RC=$?
+          cat /tmp/kt_out.txt
+
+          if [ $KT_RC -ne 0 ]; then
+            echo ">>> PASSWORD SAI hoặc keystore hỏng → debug signing (APK vẫn ra)"
             rm -f android/app/upload-keystore.jks
             exit 0
           fi
 
-          # key.properties KHÔNG được có khoảng trắng đầu dòng
-          printf '%s\n' \
-            "storePassword=${KEYSTORE_PASSWORD}" \
-            "keyPassword=${KEY_PASSWORD}" \
-            "keyAlias=${KEY_ALIAS}" \
-            "storeFile=upload-keystore.jks" \
-            > android/key.properties
+          # Test alias
+          keytool -list -keystore android/app/upload-keystore.jks \
+            -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" -storetype PKCS12 \
+            > /tmp/kt_alias.txt 2>&1
+          AL_RC=$?
+          cat /tmp/kt_alias.txt
 
-          echo "key.properties:"
+          if [ $AL_RC -ne 0 ]; then
+            echo ">>> ALIAS SAI → debug signing (APK vẫn ra)"
+            rm -f android/app/upload-keystore.jks
+            exit 0
+          fi
+
+          # Chỉ khi pass + alias đúng mới tạo key.properties
+          # PKCS12: storePassword == keyPassword
+          {
+            echo "storePassword=${KEYSTORE_PASSWORD}"
+            echo "keyPassword=${KEYSTORE_PASSWORD}"
+            echo "keyAlias=${KEY_ALIAS}"
+            echo "storeFile=upload-keystore.jks"
+          } > android/key.properties
+
+          echo ">>> RELEASE SIGNING ENABLED"
           cat android/key.properties | sed 's/Password=.*/Password=***/'
-
-          # Kiểm tra mở được keystore không
-          keytool -list -keystore android/app/upload-keystore.jks \
-            -storepass "$KEYSTORE_PASSWORD" -storetype PKCS12 2>&1 | head -20
-          RC=$?
-          if [ $RC -ne 0 ]; then
-            echo "WARN: keystore password/alias sai — fallback debug signing"
-            rm -f android/key.properties android/app/upload-keystore.jks
-            exit 0
-          fi
-
-          # Kiểm tra alias tồn tại
-          keytool -list -keystore android/app/upload-keystore.jks \
-            -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" -storetype PKCS12 2>&1 | head -10
-          RC=$?
-          if [ $RC -ne 0 ]; then
-            echo "WARN: alias không khớp — fallback debug signing"
-            rm -f android/key.properties android/app/upload-keystore.jks
-            exit 0
-          fi
-
-          echo "Keystore OK — APK will be release-signed"
-          exit 0
 
       - name: Build release APK
         run: flutter build apk --release
