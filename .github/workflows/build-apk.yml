@@ -58,60 +58,54 @@ jobs:
       - name: Get dependencies
         run: flutter pub get
 
-      # Mặc định: KHÔNG dùng keystore (debug sign) để chắc chắn ra APK.
-      # Chỉ bật release sign khi keytool xác nhận pass đúng.
-      - name: Setup signing (optional, verified)
+      - name: Setup signing (optional)
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         run: |
-          # Luôn xóa key.properties trước — mặc định debug sign
+          # Quan trọng: không để lệnh fail làm dừng step (Actions dùng bash -e)
+          set +e
+
           rm -f android/key.properties android/app/upload-keystore.jks
 
           if [ -z "$KEYSTORE_BASE64" ]; then
-            echo ">>> No KEYSTORE_BASE64 secret → debug signing (OK, APK vẫn ra)"
+            echo ">>> No KEYSTORE_BASE64 → debug signing"
             exit 0
           fi
 
-          echo ">>> KEYSTORE_BASE64 present (length: ${#KEYSTORE_BASE64})"
+          echo ">>> KEYSTORE_BASE64 length: ${#KEYSTORE_BASE64}"
           echo "$KEYSTORE_BASE64" | tr -d ' \n\r\t' | base64 --decode > android/app/upload-keystore.jks
           if [ ! -s android/app/upload-keystore.jks ]; then
             echo ">>> Decode failed → debug signing"
             rm -f android/app/upload-keystore.jks
             exit 0
           fi
-          echo ">>> Decoded jks size: $(wc -c < android/app/upload-keystore.jks) bytes"
+          echo ">>> jks size: $(wc -c < android/app/upload-keystore.jks) bytes"
 
-          # Test password — dùng file log, không pipe (tránh sai $? )
           keytool -list -keystore android/app/upload-keystore.jks \
             -storepass "$KEYSTORE_PASSWORD" -storetype PKCS12 \
             > /tmp/kt_out.txt 2>&1
-          KT_RC=$?
+          echo ">>> keytool exit: $?"
           cat /tmp/kt_out.txt
 
-          if [ $KT_RC -ne 0 ]; then
-            echo ">>> PASSWORD SAI hoặc keystore hỏng → debug signing (APK vẫn ra)"
+          if ! grep -qi "Your keystore contains" /tmp/kt_out.txt; then
+            echo ">>> Password sai hoặc keystore hỏng → debug signing (APK vẫn build)"
             rm -f android/app/upload-keystore.jks
             exit 0
           fi
 
-          # Test alias
           keytool -list -keystore android/app/upload-keystore.jks \
             -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" -storetype PKCS12 \
             > /tmp/kt_alias.txt 2>&1
-          AL_RC=$?
           cat /tmp/kt_alias.txt
 
-          if [ $AL_RC -ne 0 ]; then
-            echo ">>> ALIAS SAI → debug signing (APK vẫn ra)"
+          if grep -qi "keytool error\|does not exist\|password was incorrect" /tmp/kt_alias.txt; then
+            echo ">>> Alias sai → debug signing"
             rm -f android/app/upload-keystore.jks
             exit 0
           fi
 
-          # Chỉ khi pass + alias đúng mới tạo key.properties
-          # PKCS12: storePassword == keyPassword
           {
             echo "storePassword=${KEYSTORE_PASSWORD}"
             echo "keyPassword=${KEYSTORE_PASSWORD}"
@@ -119,8 +113,8 @@ jobs:
             echo "storeFile=upload-keystore.jks"
           } > android/key.properties
 
-          echo ">>> RELEASE SIGNING ENABLED"
-          cat android/key.properties | sed 's/Password=.*/Password=***/'
+          echo ">>> RELEASE SIGNING ON"
+          exit 0
 
       - name: Build release APK
         run: flutter build apk --release
@@ -151,21 +145,13 @@ jobs:
           body: |
             ## Touch Assistant v${{ steps.prepare.outputs.version }}
 
-            **Tải file APK bên dưới → cài và dùng ngay.**
-
-            ### Tính năng
-            - Nút nổi kéo thả
-            - Home / Back / Recents / Khóa màn hình / Chụp màn hình
-            - Tăng / Giảm âm lượng
-            - Offline, không ads, không gửi dữ liệu
+            **Tải APK ở Assets bên dưới.**
 
             ### Cách dùng
-            1. Tải `.apk` ở **Assets**
-            2. Cài trên điện thoại
-            3. Bật Accessibility + Overlay
-            4. Bật nút nổi
+            1. Cài APK
+            2. Bật Accessibility + Overlay
+            3. Bật nút nổi
 
-            ---
             Build: `${{ github.sha }}`
           files: release/*.apk
           draft: false
