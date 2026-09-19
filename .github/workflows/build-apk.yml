@@ -11,7 +11,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -27,12 +27,37 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
+          flutter-version: '3.24.5'
           cache: true
+
+      - name: Backup custom Android files
+        run: |
+          mkdir -p /tmp/android_custom
+          cp android/app/src/main/AndroidManifest.xml /tmp/android_custom/ || true
+          cp android/app/src/main/res/xml/accessibilityservice.xml /tmp/android_custom/ || true
+          cp android/app/src/main/res/values/strings.xml /tmp/android_custom/ || true
+          cp android/app/build.gradle /tmp/android_custom/app_build.gradle || true
+          cp android/settings.gradle /tmp/android_custom/settings.gradle || true
+          cp android/gradle.properties /tmp/android_custom/gradle.properties || true
+          cp -r android/gradle /tmp/android_custom/gradle 2>/dev/null || true
+
+      - name: Fill missing Android boilerplate
+        run: flutter create . --platforms=android --project-name touch_assistant --org com.bachdathan
+
+      - name: Restore custom Android files
+        run: |
+          mkdir -p android/app/src/main/res/xml android/app/src/main/res/values
+          cp /tmp/android_custom/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
+          cp /tmp/android_custom/accessibilityservice.xml android/app/src/main/res/xml/accessibilityservice.xml
+          cp /tmp/android_custom/strings.xml android/app/src/main/res/values/strings.xml
+          cp /tmp/android_custom/app_build.gradle android/app/build.gradle
+          cp /tmp/android_custom/settings.gradle android/settings.gradle
+          cp /tmp/android_custom/gradle.properties android/gradle.properties
+          cp -r /tmp/android_custom/gradle android/ 2>/dev/null || true
 
       - name: Get dependencies
         run: flutter pub get
 
-      # Ký APK nếu đã thêm Secrets (kiểm tra trong shell, không dùng if: secrets)
       - name: Decode keystore (optional)
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -50,7 +75,7 @@ jobs:
           PROP
             echo "Keystore decoded — APK will be signed"
           else
-            echo "No KEYSTORE_BASE64 secret — building unsigned/debug-signed APK"
+            echo "No KEYSTORE_BASE64 secret — building with debug signing"
           fi
 
       - name: Build release APK
@@ -88,10 +113,10 @@ jobs:
             - Nút nổi kéo thả
             - Home / Back / Recents / Khóa màn hình / Chụp màn hình
             - Tăng / Giảm âm lượng
-            - Hoàn toàn offline, không ads, không gửi dữ liệu
+            - Offline, không ads, không gửi dữ liệu
 
             ### Cách dùng
-            1. Tải file `.apk` ở phần **Assets**
+            1. Tải `.apk` ở **Assets**
             2. Cài trên điện thoại
             3. Bật Accessibility + Overlay
             4. Bật nút nổi
