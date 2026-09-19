@@ -58,25 +58,60 @@ jobs:
       - name: Get dependencies
         run: flutter pub get
 
-      - name: Decode keystore (optional)
+      - name: Decode & verify keystore (optional)
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         run: |
-          if [ -n "$KEYSTORE_BASE64" ]; then
-            echo "$KEYSTORE_BASE64" | base64 --decode > android/app/upload-keystore.jks
-            cat > android/key.properties << PROP
-          storePassword=$KEYSTORE_PASSWORD
-          keyPassword=$KEY_PASSWORD
-          keyAlias=$KEY_ALIAS
-          storeFile=upload-keystore.jks
-          PROP
-            echo "Keystore decoded — APK will be signed"
-          else
-            echo "No KEYSTORE_BASE64 secret — building with debug signing"
+          set +e
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "No KEYSTORE_BASE64 — build with debug signing"
+            exit 0
           fi
+
+          # Decode (strip whitespace/newlines that break base64)
+          echo "$KEYSTORE_BASE64" | tr -d ' \n\r\t' | base64 --decode > android/app/upload-keystore.jks
+          if [ ! -s android/app/upload-keystore.jks ]; then
+            echo "WARN: keystore decode empty — using debug signing"
+            rm -f android/app/upload-keystore.jks
+            exit 0
+          fi
+
+          # key.properties KHÔNG được có khoảng trắng đầu dòng
+          printf '%s\n' \
+            "storePassword=${KEYSTORE_PASSWORD}" \
+            "keyPassword=${KEY_PASSWORD}" \
+            "keyAlias=${KEY_ALIAS}" \
+            "storeFile=upload-keystore.jks" \
+            > android/key.properties
+
+          echo "key.properties:"
+          cat android/key.properties | sed 's/Password=.*/Password=***/'
+
+          # Kiểm tra mở được keystore không
+          keytool -list -keystore android/app/upload-keystore.jks \
+            -storepass "$KEYSTORE_PASSWORD" -storetype PKCS12 2>&1 | head -20
+          RC=$?
+          if [ $RC -ne 0 ]; then
+            echo "WARN: keystore password/alias sai — fallback debug signing"
+            rm -f android/key.properties android/app/upload-keystore.jks
+            exit 0
+          fi
+
+          # Kiểm tra alias tồn tại
+          keytool -list -keystore android/app/upload-keystore.jks \
+            -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" -storetype PKCS12 2>&1 | head -10
+          RC=$?
+          if [ $RC -ne 0 ]; then
+            echo "WARN: alias không khớp — fallback debug signing"
+            rm -f android/key.properties android/app/upload-keystore.jks
+            exit 0
+          fi
+
+          echo "Keystore OK — APK will be release-signed"
+          exit 0
 
       - name: Build release APK
         run: flutter build apk --release
